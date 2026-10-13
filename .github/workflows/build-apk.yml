@@ -62,7 +62,7 @@ jobs:
           test -n "$(find app/build/outputs/apk -type f -name '*.apk' -print -quit)"
 
       - name: Upload APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: modified-termux-debug-apks
           path: app/build/outputs/apk/**/*.apk
