@@ -1,0 +1,181 @@
+package com.termux.app.terminal.io;
+
+import android.annotation.SuppressLint;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.Toast;
+import android.view.Gravity;
+import android.view.View;
+
+import androidx.annotation.NonNull;
+import androidx.drawerlayout.widget.DrawerLayout;
+
+import com.termux.app.TermuxActivity;
+import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
+import com.termux.app.terminal.TermuxTerminalViewClient;
+import com.termux.shared.logger.Logger;
+import com.termux.shared.termux.extrakeys.ExtraKeysConstants;
+import com.termux.shared.termux.extrakeys.ExtraKeysInfo;
+import com.termux.shared.termux.settings.properties.TermuxPropertyConstants;
+import com.termux.shared.termux.settings.properties.TermuxSharedProperties;
+import com.termux.shared.termux.terminal.io.TerminalExtraKeys;
+import com.termux.view.TerminalView;
+
+import org.json.JSONException;
+
+public class TermuxTerminalExtraKeys extends TerminalExtraKeys {
+
+    private static final int TURBO_PASTE_CHUNK_SIZE = 4096;
+    private static final long TURBO_PASTE_DELAY_MS = 8L;
+    private final Handler mTurboPasteHandler = new Handler(Looper.getMainLooper());
+    private Runnable mTurboPasteRunnable;
+
+    private ExtraKeysInfo mExtraKeysInfo;
+
+    final TermuxActivity mActivity;
+    final TermuxTerminalViewClient mTermuxTerminalViewClient;
+    final TermuxTerminalSessionActivityClient mTermuxTerminalSessionActivityClient;
+
+    private static final String LOG_TAG = "TermuxTerminalExtraKeys";
+
+    public TermuxTerminalExtraKeys(TermuxActivity activity, @NonNull TerminalView terminalView,
+                                   TermuxTerminalViewClient termuxTerminalViewClient,
+                                   TermuxTerminalSessionActivityClient termuxTerminalSessionActivityClient) {
+        super(terminalView);
+
+        mActivity = activity;
+        mTermuxTerminalViewClient = termuxTerminalViewClient;
+        mTermuxTerminalSessionActivityClient = termuxTerminalSessionActivityClient;
+
+        setExtraKeys();
+    }
+
+
+    /**
+     * Set the terminal extra keys and style.
+     */
+    private void setExtraKeys() {
+        mExtraKeysInfo = null;
+
+        try {
+            // The mMap stores the extra key and style string values while loading properties
+            // Check {@link #getExtraKeysInternalPropertyValueFromValue(String)} and
+            // {@link #getExtraKeysStyleInternalPropertyValueFromValue(String)}
+            String extrakeys = (String) mActivity.getProperties().getInternalPropertyValue(TermuxPropertyConstants.KEY_EXTRA_KEYS, true);
+            String extraKeysStyle = (String) mActivity.getProperties().getInternalPropertyValue(TermuxPropertyConstants.KEY_EXTRA_KEYS_STYLE, true);
+
+            ExtraKeysConstants.ExtraKeyDisplayMap extraKeyDisplayMap = ExtraKeysInfo.getCharDisplayMapForStyle(extraKeysStyle);
+            if (ExtraKeysConstants.EXTRA_KEY_DISPLAY_MAPS.DEFAULT_CHAR_DISPLAY.equals(extraKeyDisplayMap) && !TermuxPropertyConstants.DEFAULT_IVALUE_EXTRA_KEYS_STYLE.equals(extraKeysStyle)) {
+                Logger.logError(TermuxSharedProperties.LOG_TAG, "The style \"" + extraKeysStyle + "\" for the key \"" + TermuxPropertyConstants.KEY_EXTRA_KEYS_STYLE + "\" is invalid. Using default style instead.");
+                extraKeysStyle = TermuxPropertyConstants.DEFAULT_IVALUE_EXTRA_KEYS_STYLE;
+            }
+
+            mExtraKeysInfo = new ExtraKeysInfo(extrakeys, extraKeysStyle, ExtraKeysConstants.CONTROL_CHARS_ALIASES);
+        } catch (JSONException e) {
+            Logger.showToast(mActivity, "Could not load and set the \"" + TermuxPropertyConstants.KEY_EXTRA_KEYS + "\" property from the properties file: " + e.toString(), true);
+            Logger.logStackTraceWithMessage(LOG_TAG, "Could not load and set the \"" + TermuxPropertyConstants.KEY_EXTRA_KEYS + "\" property from the properties file: ", e);
+
+            try {
+                mExtraKeysInfo = new ExtraKeysInfo(TermuxPropertyConstants.DEFAULT_IVALUE_EXTRA_KEYS, TermuxPropertyConstants.DEFAULT_IVALUE_EXTRA_KEYS_STYLE, ExtraKeysConstants.CONTROL_CHARS_ALIASES);
+            } catch (JSONException e2) {
+                Logger.showToast(mActivity, "Can't create default extra keys",true);
+                Logger.logStackTraceWithMessage(LOG_TAG, "Could create default extra keys: ", e);
+                mExtraKeysInfo = null;
+            }
+        }
+    }
+
+    public ExtraKeysInfo getExtraKeysInfo() {
+        return mExtraKeysInfo;
+    }
+
+    @SuppressLint("RtlHardcoded")
+    @Override
+    public void onTerminalExtraKeyButtonClick(View view, String key, boolean ctrlDown, boolean altDown, boolean shiftDown, boolean fnDown) {
+        if ("KEYBOARD".equals(key)) {
+            if(mTermuxTerminalViewClient != null)
+                mTermuxTerminalViewClient.onToggleSoftKeyboardRequest();
+        } else if ("DRAWER".equals(key)) {
+            DrawerLayout drawerLayout = mTermuxTerminalViewClient.getActivity().getDrawer();
+            if (drawerLayout.isDrawerOpen(Gravity.LEFT))
+                drawerLayout.closeDrawer(Gravity.LEFT);
+            else
+                drawerLayout.openDrawer(Gravity.LEFT);
+        } else if ("PASTE".equals(key)) {
+            if(mTermuxTerminalSessionActivityClient != null)
+                mTermuxTerminalSessionActivityClient.onPasteTextFromClipboard(null);
+        } else if ("COPYALL".equals(key)) {
+            if (mActivity.getCurrentSession() != null && mActivity.getCurrentSession().getEmulator() != null) {
+                String text = mActivity.getCurrentSession().getEmulator().getScreen().getTranscriptText();
+                ClipboardManager clipboard = (ClipboardManager) mActivity.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Termux terminal", text));
+                    Toast.makeText(mActivity, "Terminal text copied", Toast.LENGTH_SHORT).show();
+                }
+            }
+        } else if ("PASTEENTER".equals(key)) {
+            ClipboardManager clipboard = (ClipboardManager) mActivity.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null && clipboard.hasPrimaryClip() && clipboard.getPrimaryClip() != null
+                && clipboard.getPrimaryClip().getItemCount() > 0 && mActivity.getCurrentSession() != null) {
+                CharSequence pasted = clipboard.getPrimaryClip().getItemAt(0).coerceToText(mActivity);
+                if (pasted != null) mActivity.getCurrentSession().write(pasted.toString() + "\n");
+            }
+        } else if ("TURBO".equals(key)) {
+            startTurboPaste();
+        } else if ("STOP".equals(key)) {
+            cancelTurboPaste();
+        } else if ("SCROLL".equals(key)) {
+            TerminalView terminalView = mTermuxTerminalViewClient.getActivity().getTerminalView();
+            if (terminalView != null && terminalView.mEmulator != null)
+                terminalView.mEmulator.toggleAutoScrollDisabled();
+        } else {
+            super.onTerminalExtraKeyButtonClick(view, key, ctrlDown, altDown, shiftDown, fnDown);
+        }
+    }
+
+
+    /** Paste clipboard contents in small chunks so large pastes do not block the UI. */
+    private String getTurboClipboardText() {
+        ClipboardManager clipboard = (ClipboardManager) mActivity.getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null || !clipboard.hasPrimaryClip()) return null;
+        ClipData clip = clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) return null;
+        CharSequence value = clip.getItemAt(0).coerceToText(mActivity);
+        return value == null ? null : value.toString();
+    }
+
+    private void startTurboPaste() {
+        cancelTurboPaste();
+        final String text = getTurboClipboardText();
+        if (text == null || text.isEmpty() || mActivity.getCurrentSession() == null) return;
+        final com.termux.terminal.TerminalSession session = mActivity.getCurrentSession();
+        final int[] offset = {0};
+        mTurboPasteRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (mTurboPasteRunnable != this) return;
+                if (offset[0] >= text.length()) {
+                    mTurboPasteRunnable = null;
+                    return;
+                }
+                int end = Math.min(offset[0] + TURBO_PASTE_CHUNK_SIZE, text.length());
+                session.write(text.substring(offset[0], end));
+                offset[0] = end;
+                mTurboPasteHandler.postDelayed(this, TURBO_PASTE_DELAY_MS);
+            }
+        };
+        mTurboPasteHandler.post(mTurboPasteRunnable);
+    }
+
+    /** Cancel the queued TURBO paste. This does not send Ctrl+C to the shell. */
+    private void cancelTurboPaste() {
+        if (mTurboPasteRunnable != null) {
+            mTurboPasteHandler.removeCallbacks(mTurboPasteRunnable);
+            mTurboPasteRunnable = null;
+        }
+    }
+
+}
