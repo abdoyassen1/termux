@@ -1,71 +1,30 @@
 name: Build modified Termux APK
-
 on:
   workflow_dispatch:
-
   push:
-    branches:
-      - main
     paths:
       - 'app/**'
-      - 'termux-shared/**'
-      - 'terminal-emulator/**'
       - 'gradle/**'
       - '*.gradle'
       - 'gradle.properties'
-      - 'gradlew'
       - '.github/workflows/build-apk.yml'
-
-permissions:
-  contents: read
-
 jobs:
   build:
-    name: Build APK
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Locate Android SDK
-        run: |
-          echo "ANDROID_HOME=${ANDROID_HOME:-$ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
-
-      - name: Accept Android licenses
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-
+      - uses: android-actions/setup-android@v3
       - name: Install Android SDK components
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "ndk;29.0.14206865"
-
-      - name: Verify project files
-        run: |
-          test -f gradlew
-          test -f app/build.gradle
-          chmod +x gradlew
-
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
       - name: Build debug APKs
-        run: |
-          ./gradlew --no-daemon assembleDebug
-
-      - name: Verify generated APKs
-        run: |
-          find app/build/outputs/apk -type f -name '*.apk' -print
-          test -n "$(find app/build/outputs/apk -type f -name '*.apk' -print -quit)"
-
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
